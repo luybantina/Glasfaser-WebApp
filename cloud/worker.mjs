@@ -1,4 +1,4 @@
-import {COLLECTIONS,LISTS,unpack} from './shared.mjs';
+﻿import {COLLECTIONS,LISTS,unpack} from './shared.mjs';
 import {digest,checkPassword,publicUser} from './auth.mjs';
 
 const HEADERS={'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'DENY'};
@@ -49,6 +49,29 @@ async function login(request,env) {
   return new Response(null,{status:303,headers:{...HEADERS,Location:'/', 'Set-Cookie':cookie(token)}});
 }
 
+// Attachments (PDF/photos) are binary values in the FILES KV namespace, addressed by the SHA-256 of the bytes.
+// They are streamed in and out without any JavaScript decoding (the free plan allows only 10 ms CPU per request).
+const FILE_TYPES=['image/jpeg','image/png','image/webp','image/gif','application/pdf'];
+const FILE_MAX_BYTES=20000000;
+const hex=buffer=>Array.from(new Uint8Array(buffer),x=>x.toString(16).padStart(2,'0')).join('');
+async function filePost(request,env,user,url) {
+  if(user.role==='viewer')fail('Нет прав на редактирование.',403);
+  if(!env.FILES)fail('Хранилище файлов не подключено.',503);
+  const id=url.searchParams.get('id')||'',type=url.searchParams.get('type')||'';
+  if(!/^[a-f0-9]{64}$/.test(id)||!FILE_TYPES.includes(type))fail('Invalid file');
+  const bytes=await request.arrayBuffer();
+  if(!bytes.byteLength||bytes.byteLength>FILE_MAX_BYTES)fail('Invalid file data');
+  if(hex(await crypto.subtle.digest('SHA-256',bytes))!==id)fail('File checksum mismatch');
+  await env.FILES.put(id,bytes,{metadata:{type}});
+  return json({url:`/api/files/${id}`});
+}
+async function fileGet(env,id,head) {
+  if(!env.FILES||!/^[a-f0-9]{64}$/.test(id))return json({error:'not_found'},404);
+  const {value,metadata}=await env.FILES.getWithMetadata(id,{type:'stream'});
+  if(!value||!FILE_TYPES.includes(metadata?.type))return json({error:'not_found'},404);
+  return new Response(head?null:value,{headers:{'Content-Type':metadata.type,'Content-Disposition':'inline','Cache-Control':'private, max-age=31536000, immutable','X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'SAMEORIGIN'}});
+}
+
 async function patch(request,env,user) {
   if(user.role==='viewer')fail('Нет прав на редактирование.',403);
   const {revision,operations}=await request.json();
@@ -97,7 +120,7 @@ export default {
       if(!['GET','HEAD','POST'].includes(request.method))return json({error:'method_not_allowed'},405);
       if(request.method==='POST') {
         if(request.headers.get('Origin')!==url.origin)fail('Недопустимый источник запроса.',403);
-        if(Number(request.headers.get('Content-Length')||0)>4000000)fail('Слишком большой запрос.',413);
+        if(Number(request.headers.get('Content-Length')||0)>(path==='/api/files'?FILE_MAX_BYTES+1000:4000000))fail('Слишком большой запрос.',413);
       }
       if(path==='/login'&&request.method==='POST')return await login(request,env);
       const user=await authenticate(request,env);
@@ -110,6 +133,8 @@ export default {
       if(path==='/api/state'&&request.method==='GET')return json(await snapshot(env));
       if(path==='/api/revision'&&request.method==='GET')return json(await env.DB.prepare('SELECT revision FROM meta WHERE id=1').first());
       if(path==='/api/changes'&&request.method==='POST')return await patch(request,env,user);
+      if(path==='/api/files'&&request.method==='POST')return await filePost(request,env,user,url);
+      if(path.startsWith('/api/files/')&&request.method!=='POST')return await fileGet(env,path.slice(11),request.method==='HEAD');
       if(path.startsWith('/api/'))return json({error:'not_found'},404);
       if(request.method!=='GET'&&request.method!=='HEAD')return json({error:'method_not_allowed'},405);
       if(path==='/'||path==='/index.html') {

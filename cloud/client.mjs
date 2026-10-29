@@ -12,7 +12,52 @@ export async function start(boot,bridge) {
   bar.style.cssText='position:fixed;bottom:8px;right:8px;z-index:2001;background:#17324d;color:white;border-radius:9px;padding:9px 12px;font:13px system-ui;max-width:90vw;box-shadow:0 2px 10px #0003;display:flex;align-items:center;gap:10px;flex-wrap:wrap';
   const label=document.createElement('span');bar.append(label);
   const button=(text,action,parent=bar)=>{const b=document.createElement('button');b.textContent=text;b.style.cssText='cursor:pointer;font:inherit;padding:5px 8px;border:1px solid #abbccc;border-radius:5px;background:white;color:#17324d';b.onclick=action;parent.append(b);return b;};
-  const status=text=>{label.textContent=text;};
+  const status=text=>{label.textContent=text;bar.style.background=/Облако: всё сохранено/.test(text)?'#17324d':'#8a3b12';};
+  /* Nothing of the database is kept in the browser: the app's own localStorage 'gfdb' reads/writes go to memory only. */
+  let memDb=JSON.stringify(boot.data);
+  const originalGet=Storage.prototype.getItem,originalRemove=Storage.prototype.removeItem;
+  try{originalRemove.call(localStorage,'gfdb');}catch{}
+  // Old patches also put their own wrapper directly on `localStorage` (own property), which bypasses the prototype:
+  // keep it as the underlying function and take its place as well.
+  const baseSet=Object.getOwnPropertyDescriptor(localStorage,'setItem')?.value||originalSet;
+  const guardedSet=function(key,value) {
+    if(this===localStorage&&key==='gfdb') {
+      memDb=String(value);
+      if(!suppress){status('Изменения ещё не отправлены в облако — не закрывайте страницу');clearTimeout(retryTimer);retryTimer=setTimeout(sync,300);}
+      return;
+    }
+    return baseSet.call(this,key,value);
+  };
+  Storage.prototype.setItem=guardedSet;
+  if(Object.getOwnPropertyDescriptor(localStorage,'setItem'))localStorage.setItem=guardedSet;
+  Storage.prototype.getItem=function(key) {
+    if(this===localStorage&&key==='gfdb')return memDb;
+    return originalGet.call(this,key);
+  };
+  Storage.prototype.removeItem=function(key) {
+    if(this===localStorage&&key==='gfdb'){memDb=undefined;return;}
+    return originalRemove.call(this,key);
+  };
+  /* PDF/photos are uploaded to their own cloud table; the record keeps only the address /api/files/<id>. */
+  const DATA_URL=/^data:(image\/(?:jpeg|png|webp|gif)|application\/pdf);base64,([A-Za-z0-9+/]+={0,2})$/;
+  const sha256=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
+  async function externalize() {
+    const found=[],stack=[bridge.get()];
+    while(stack.length) {
+      const node=stack.pop();
+      if(!node||typeof node!=='object')continue;
+      if(typeof node.dataUrl==='string'&&node.dataUrl.length>1000&&node.dataUrl.startsWith('data:')){found.push(node);continue;}
+      for(const key in node){const v=node[key];if(v&&typeof v==='object')stack.push(v);}
+    }
+    for(const node of found) {
+      const original=node.dataUrl,match=DATA_URL.exec(original);
+      if(!match)continue;
+      const bytes=Uint8Array.from(atob(match[2]),c=>c.charCodeAt(0)),id=await sha256(bytes);
+      status('Облако: загрузка файла…');
+      await api(`/api/files?id=${id}&type=${encodeURIComponent(match[1])}`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:bytes},180000);
+      if(node.dataUrl===original)node.dataUrl=`/api/files/${id}`;
+    }
+  }
   const download=(data,name='Glasfaser_Cloud_Local.gfb')=>{
     const url=URL.createObjectURL(new Blob([JSON.stringify({format:'GFB-1',appVersion:'43.1',createdAt:new Date().toISOString(),data},null,2)],{type:'application/json'}));
     const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -29,17 +74,15 @@ export async function start(boot,bridge) {
 
   const editing=()=>!!document.querySelector('#modal .modal')||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);
   function persist() {
-    const current=clone(bridge.get());
-    if(equal(current,base)){localStorage.removeItem(pendingKey);return;}
-    try{originalSet.call(localStorage,pendingKey,JSON.stringify({base,data:current,revision}));}
-    catch{status('Не удалось сохранить локальную копию. Скачайте её кнопкой справа.');}
+    // Unsent changes are no longer written to the browser; only old leftovers are cleaned up.
+    try{localStorage.removeItem(pendingKey);}catch{}
   }
   function install(data,render=true) {
     suppress=true;
     try{bridge.set(clone(data));if(render)bridge.render();}finally{suppress=false;}
   }
-  async function api(path,options={}) {
-    const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);
+  async function api(path,options={},timeoutMs=20000) {
+    const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs);
     try{
       const response=await fetch(path,{...options,credentials:'same-origin',cache:'no-store',signal:controller.signal});
       if(response.status===401)throw Object.assign(new Error('Сеанс истёк. Сохраните копию изменений и войдите снова.'),{auth:true});
@@ -78,6 +121,8 @@ export async function start(boot,bridge) {
     if(busy||conflicted||editing())return;
     busy=true;
     try {
+      await externalize();
+      if(editing())return;
       let operations=diff(base,bridge.get());
       if(!operations.length) {
         const latest=await api('/api/revision');
@@ -104,7 +149,7 @@ export async function start(boot,bridge) {
         if(editing())break;
       }
       status(operations.length?'Ожидает отправки в облако':'Облако: всё сохранено');
-    }catch(error){persist();status(error.auth?error.message:`Нет синхронизации: ${error.message}`);}
+    }catch(error){persist();status(error.auth?error.message:`Нет синхронизации: ${error.message}. Изменения НЕ сохранены — не закрывайте страницу.`);}
     finally{busy=false;}
   }
 
@@ -121,11 +166,6 @@ export async function start(boot,bridge) {
   if(otherKeys.length)button('Копии других вкладок',()=>{
     for(const key of otherKeys){const value=localStorage.getItem(key);if(value)download(JSON.parse(value).data,'Glasfaser_Pending_Tab.gfb');}
   });
-  Storage.prototype.setItem=function(key,value) {
-    const result=originalSet.call(this,key,value);
-    if(this===localStorage&&key==='gfdb'&&!suppress){queueMicrotask(persist);status('Изменения сохранены на устройстве; ожидают отправки');clearTimeout(retryTimer);retryTimer=setTimeout(sync,300);}
-    return result;
-  };
   window.gfLogout316=()=>logoutButton.click();
   window.installUpdateFile=input=>{input.value='';status('Облачная версия обновляется централизованно. Локальные .gfu здесь не устанавливаются.');};
   // The server owns authentication. Existing UI still uses the same session user.

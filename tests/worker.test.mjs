@@ -14,7 +14,7 @@ const change=(revision,operations)=>request('/api/changes',{method:'POST',header
 before(async()=>{
   execFileSync(process.execPath,['scripts/build.mjs']);
   execFileSync(process.execPath,[fileURLToPath(new URL('../node_modules/wrangler/bin/wrangler.js',import.meta.url)),'deploy','--dry-run','--outdir','.private/test-bundle'],{env:{...process.env,WRANGLER_SEND_METRICS:'false'},stdio:'pipe'});
-  mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'.private/test-bundle/worker.js',compatibilityDate:'2026-10-28',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],serviceBindings:{ASSETS:async req=>new Response(await readFile(new URL('../dist/index.html',import.meta.url),'utf8'),{headers:{'Content-Type':'text/html'}})}}));
+  mf=new Miniflare(convertV4MiniflareOptions({modules:true,scriptPath:'.private/test-bundle/worker.js',compatibilityDate:'2026-10-28',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],kvNamespaces:['FILES'],serviceBindings:{ASSETS:async req=>new Response(await readFile(new URL('../dist/index.html',import.meta.url),'utf8'),{headers:{'Content-Type':'text/html'}})}}));
   db=await mf.getD1Database('DB');
   const schema=await readFile(new URL('../cloud/migrations/0001.sql',import.meta.url),'utf8');
   for(const statement of schema.split(';').filter(x=>x.trim()))await db.prepare(statement).run();
@@ -96,4 +96,25 @@ test('changing own password preserves this session and revokes other sessions',a
   assert.equal((await request('/api/state')).status,200);
   assert.equal((await request('/api/state',{headers:{Cookie:oldCookie}})).status,401);
   const safe=(await state()).data.users.find(x=>x.id==='admin');assert.equal(safe.hasPassword,true);assert.equal(safe.passHash,undefined);
+});
+
+const sha=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
+const upload=(id,type,body,headers={})=>request(`/api/files?id=${id}&type=${encodeURIComponent(type)}`,{method:'POST',headers:{'Content-Type':'application/octet-stream',...headers},body});
+test('attachments are stored separately, served only after login and verified by checksum',async()=>{
+  const bytes=new Uint8Array(6*1024*1024);for(let i=0;i<bytes.length;i++)bytes[i]=(i*31+7)&255;
+  const id=await sha(bytes);
+  const ok=await upload(id,'application/pdf',bytes);assert.equal(ok.status,200);assert.equal((await ok.json()).url,`/api/files/${id}`);
+  assert.equal((await upload(id,'application/pdf',bytes)).status,200); // idempotent
+  const got=await request(`/api/files/${id}`);assert.equal(got.status,200);
+  assert.equal(got.headers.get('content-type'),'application/pdf');assert.equal(got.headers.get('x-frame-options'),'SAMEORIGIN');
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()),Buffer.from(bytes));
+  const anonymous=await mf.dispatchFetch(origin+`/api/files/${id}`);assert.equal(anonymous.status,401);
+  assert.equal((await upload('0'.repeat(64),'application/pdf',bytes)).status,400); // wrong checksum
+  assert.equal((await upload(id,'text/html',bytes)).status,400);                   // type not allowed
+  assert.equal((await request('/api/files/'+'f'.repeat(64))).status,404);
+});
+test('a viewer cannot upload attachments',async()=>{
+  const login=await request('/login',{method:'POST',body:new URLSearchParams({login:'test-viewer',password:'test-password'}),redirect:'manual'});
+  const viewer=login.headers.get('set-cookie').split(';')[0],bytes=new TextEncoder().encode('hello');
+  assert.equal((await upload(await sha(bytes),'image/png',bytes,{Cookie:viewer})).status,403);
 });
