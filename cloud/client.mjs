@@ -196,13 +196,30 @@ export async function start(boot,bridge) {
     const A=window.__gfAudit;
     if(A&&A.queue.length&&navigator.sendBeacon){try{navigator.sendBeacon('/api/audit',new Blob([JSON.stringify({entries:A.queue.slice(0,100)})],{type:'application/json'}));}catch{}}
   });
+  /* A focused field (filter, search) must not stop other people's changes from arriving: they are merged into the data
+     without redrawing; the screen is redrawn as soon as the field is left. With a form window open nothing is applied. */
+  const modalOpen=()=>!!document.querySelector('#modal .modal');
+  let needRender=false;
+  async function pullQuiet() {
+    if(modalOpen())return;
+    const latest=await api('/api/revision');
+    if(latest.revision===revision)return;
+    const remote=await api('/api/state');
+    if(modalOpen())return;
+    const local=clone(bridge.get()),oldBase=clone(base),conflicts=[];
+    const merged=merge(oldBase,local,remote.data,'',conflicts);
+    if(conflicts.length)return; // decided after the field is left
+    base=clone(remote.data);revision=remote.revision;
+    if(!equal(local,merged)){install(merged,false);needRender=true;}
+  }
+  setInterval(()=>{if(needRender&&!editing()){needRender=false;try{bridge.render();}catch{}}},700);
   async function sync() {
     flushAudit();
     if(busy||conflicted)return;
     busy=true;
     try {
       await externalize();
-      if(editing()){await pushOnly();return;}
+      if(editing()){await pushOnly();await pullQuiet();return;}
       let operations=diff(base,bridge.get());
       if(!operations.length) {
         const latest=await api('/api/revision');
