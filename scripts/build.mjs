@@ -18,6 +18,11 @@ html=html.replace(/(<script[^>]*id="gfBakedUpdates"[^>]*>)([\s\S]*?)(<\/script>)
   const audit=baked.patches.find(p=>p.to==='37.7');
   if(!audit||!audit.patch.includes('Записи хранятся на этом устройстве и не могут быть изменены из программы.')||!audit.patch.includes('Die Einträge liegen auf diesem Gerät und lassen sich im Programm nicht ändern.'))throw new Error('Activity log texts changed; update cloud adapter.');
   audit.patch=audit.patch.replace('Записи хранятся на этом устройстве и не могут быть изменены из программы.','Записи общие для всех сотрудников и устройств и не могут быть изменены из программы. Новые записи других сотрудников появляются после обновления страницы.').replace('Die Einträge liegen auf diesem Gerät und lassen sich im Programm nicht ändern.','Die Einträge sind für alle Mitarbeiter und Geräte gemeinsam und lassen sich im Programm nicht ändern. Neue Einträge anderer Mitarbeiter erscheinen nach dem Neuladen der Seite.');
+  // Muffenspleißpläne are shared through the cloud (cloud/plans.mjs): the hint must not say "in this browser".
+  const plans=baked.patches.find(p=>p.to==='33.3');
+  const planRu='Файлы хранятся в этом браузере и не входят в резервную копию.',planDe='Die Dateien liegen in diesem Browser und sind nicht in der Sicherung enthalten.';
+  if(!plans||!plans.patch.includes(planRu)||!plans.patch.includes(planDe))throw new Error('Splice plan hint changed; update cloud adapter.');
+  plans.patch=plans.patch.replace(planRu,'Файлы хранятся в облаке и доступны всем сотрудникам: на других устройствах они появляются сами в течение минуты.').replace(planDe,'Die Dateien liegen in der Cloud und stehen allen Mitarbeitern zur Verfügung; auf anderen Geräten erscheinen sie automatisch innerhalb einer Minute.');
   return open+JSON.stringify(baked).replace(/</g,'\\u003c')+close;
 });
 html=html.replace(oldStart,`(async()=>{
