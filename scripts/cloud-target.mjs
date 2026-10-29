@@ -1,0 +1,12 @@
+import {writeFile} from 'node:fs/promises';
+import {options,config,root} from './cloud-cli.mjs';
+import {join} from 'node:path';
+const opts=options();
+if(!/^[a-f0-9]{32}$/.test(opts['account-id']||''))throw new Error('Provide --account-id with the destination account ID');
+if(!/^[a-f0-9-]{36}$/.test(opts['database-id']||''))throw new Error('Provide --database-id with the newly created D1 UUID');
+if(!/^[a-z][a-z0-9-]{2,50}$/.test(opts.name||''))throw new Error('Provide --name with the new Worker name');
+const source=await config(join(root,'wrangler.jsonc'));
+if(opts['database-id']===source.d1_databases[0].database_id)throw new Error('Refusing to target the existing production database');
+const target={...source,name:opts.name,account_id:opts['account-id'],d1_databases:[{binding:'DB',database_name:opts['database-name']||opts.name,database_id:opts['database-id'],migrations_dir:'cloud/migrations'}]};
+await writeFile(join(root,'wrangler.migration.json'),JSON.stringify(target,null,2)+'\n',{flag:'wx'});
+console.log('Created wrangler.migration.json. Production configuration was not modified. Always pass --config wrangler.migration.json for the new account.');

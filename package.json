@@ -1,0 +1,20 @@
+{
+  "name": "glasfaser-cloud",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "npm run build && wrangler dev",
+    "test": "node --test tests/*.test.mjs",
+    "deploy": "npm run build && wrangler deploy",
+    "cloud:backup": "node scripts/cloud-backup.mjs",
+    "cloud:target": "node scripts/cloud-target.mjs",
+    "cloud:account": "node scripts/cloud-account.mjs",
+    "cloud:restore": "node scripts/cloud-restore.mjs"
+  },
+  "devDependencies": {
+    "miniflare": "5.20261023.1-beta",
+    "wrangler": "4.154.0"
+  }
+}
