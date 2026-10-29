@@ -41,6 +41,38 @@ export async function start(boot,bridge) {
   /* PDF/photos are uploaded to their own cloud table; the record keeps only the address /api/files/<id>. */
   const DATA_URL=/^data:(image\/(?:jpeg|png|webp|gif)|application\/pdf);base64,([A-Za-z0-9+/]+={0,2})$/;
   const sha256=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join('');
+  /* PDF: pages are re-rendered as JPEG (about 170 dpi, quality 0.78) and rebuilt into a smaller PDF.
+     Used only when it saves at least 30%; otherwise (text PDFs, small files, any error) the original is kept. */
+  const PDF_MIN_BYTES=800000;
+  const loadScript=src=>new Promise((resolve,reject)=>{
+    const existing=document.querySelector(`script[data-gf-src="${src}"]`);
+    if(existing){existing.addEventListener('load',resolve);if(existing.dataset.done)resolve();return;}
+    const s=document.createElement('script');s.src=src;s.dataset.gfSrc=src;s.onload=()=>{s.dataset.done='1';resolve();};s.onerror=()=>reject(new Error('script '+src));document.head.append(s);
+  });
+  async function compressPdf(bytes) {
+    if(bytes.length<PDF_MIN_BYTES)return null;
+    try{
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+      await loadScript('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js');
+      const pdfjs=window.pdfjsLib;pdfjs.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const source=await pdfjs.getDocument({data:bytes.slice()}).promise;
+      if(source.numPages>40)return null;
+      const out=await window.PDFLib.PDFDocument.create();
+      for(let n=1;n<=source.numPages;n++) {
+        const page=await source.getPage(n),base=page.getViewport({scale:1});
+        const scale=Math.min(2.4,2000/Math.max(base.width,base.height));
+        const canvas=document.createElement('canvas'),view=page.getViewport({scale});
+        canvas.width=Math.round(view.width);canvas.height=Math.round(view.height);
+        const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+        await page.render({canvasContext:ctx,viewport:view}).promise;
+        const jpg=await out.embedJpg(await new Promise(r=>canvas.toBlob(r,'image/jpeg',0.78)).then(b=>b.arrayBuffer()));
+        const target=out.addPage([base.width,base.height]);target.drawImage(jpg,{x:0,y:0,width:base.width,height:base.height});
+        canvas.width=canvas.height=0;
+      }
+      const result=await out.save();
+      return result.length<=bytes.length*0.7?result:null;
+    }catch(error){console.warn('PDF compression skipped',error);return null;}
+  }
   async function externalize() {
     const found=[],stack=[bridge.get()];
     while(stack.length) {
@@ -52,7 +84,13 @@ export async function start(boot,bridge) {
     for(const node of found) {
       const original=node.dataUrl,match=DATA_URL.exec(original);
       if(!match)continue;
-      const bytes=Uint8Array.from(atob(match[2]),c=>c.charCodeAt(0)),id=await sha256(bytes);
+      let bytes=Uint8Array.from(atob(match[2]),c=>c.charCodeAt(0));
+      if(match[1]==='application/pdf'){
+        status('Облако: сжатие PDF…');
+        const smaller=await Promise.race([compressPdf(bytes),new Promise(resolve=>setTimeout(()=>resolve(null),60000))]);
+        if(smaller){bytes=smaller;if(typeof node.size==='number')node.size=bytes.length;}
+      }
+      const id=await sha256(bytes);
       status('Облако: загрузка файла…');
       await api(`/api/files?id=${id}&type=${encodeURIComponent(match[1])}`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:bytes},180000);
       if(node.dataUrl===original)node.dataUrl=`/api/files/${id}`;
