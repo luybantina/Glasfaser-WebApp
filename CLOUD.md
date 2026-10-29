@@ -110,3 +110,12 @@ npx wrangler d1 export glasfaser-test --remote --output .private/server-backup.s
 4 404 записи, включая 3 614 адресов, 408 работ, 20 встреч и 8 пользователей.
 Проверен интерфейс на синтетических данных: вход и обмен изменением проекта
 между двумя вкладками.
+
+## Тестовая среда (staging)
+
+Worker glasfaser-staging, отдельная D1 glasfaser-staging, отдельный KV glasfaser-files-staging, красная плашка «ТЕСТОВАЯ СРЕДА». Конфиг wrangler.staging.json (не в Git, лежит в приватном репозитории). Сначала публиковать сюда:
+
+    npm run build && npx wrangler deploy --config wrangler.staging.json
+
+После проверки на рабочий сайт: npx wrangler deploy --config wrangler.migration.json. Данные при публикации не меняются; новый раздел данных нужно добавить в cloud/shared.mjs.
+

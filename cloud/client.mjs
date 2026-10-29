@@ -109,6 +109,12 @@ export async function start(boot,bridge) {
     localStorage.removeItem('gfdb');sessionStorage.removeItem('gf_session_user');location.href='/';
   });
   document.body.append(bar);
+  if(boot.env==='staging') {
+    const banner=document.createElement('div');
+    banner.textContent='ТЕСТОВАЯ СРЕДА — данные здесь не рабочие';
+    banner.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2002;background:#b42318;color:white;text-align:center;font:600 12px system-ui;padding:3px;pointer-events:none';
+    document.body.append(banner);
+  }
 
   const editing=()=>!!document.querySelector('#modal .modal')||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);
   function persist() {

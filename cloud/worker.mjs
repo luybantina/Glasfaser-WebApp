@@ -140,7 +140,7 @@ export default {
       if(path==='/'||path==='/index.html') {
         const asset=await env.ASSETS.fetch(new Request(new URL('/index.html',url),{method:'GET'}));
         if(asset.status!==200)fail('Файлы приложения временно недоступны.',503);
-        const boot={...await snapshot(env),user:publicUser(user)};
+        const boot={...await snapshot(env),user:publicUser(user),env:env.ENVIRONMENT||'production'};
         const script=`<script>window.__GF_CLOUD__=${JSON.stringify(boot).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029')};sessionStorage.setItem('gf_session_user',window.__GF_CLOUD__.user.id);</script>`;
         const template=await asset.text();
         if(!template.includes('<!--CLOUD_BOOTSTRAP-->'))fail('Неверная сборка облачного приложения.',503);

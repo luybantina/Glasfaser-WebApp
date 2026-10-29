@@ -12,3 +12,4 @@ wrangler.account.json
 *.bundle
 *.zip
 !cloud/migrations/*.sql
+wrangler.staging.json
