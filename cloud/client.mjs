@@ -104,6 +104,7 @@ export async function start(boot,bridge) {
   button('Повторить',()=>sync());
   const logoutButton=button('Выйти',async()=>{
     await sync();
+    await flushAudit();
     if(diff(base,bridge.get()).length||conflicted){status('Сначала отправьте изменения или сохраните локальную копию.');return;}
     await api('/api/logout',{method:'POST'});
     localStorage.removeItem('gfdb');sessionStorage.removeItem('gf_session_user');location.href='/';
@@ -175,7 +176,28 @@ export async function start(boot,bridge) {
     }
     status('Облако: всё сохранено');
   }
+  /* shared activity log: entries produced on this device are sent to the cloud (the data sync never waits for this) */
+  async function flushAudit() {
+    const A=window.__gfAudit;if(!A||A.busy)return;
+    if(!A.queue.length){if(A.afterFlush){const f=A.afterFlush;A.afterFlush=null;f();}return;}
+    A.busy=true;
+    try {
+      while(A.queue.length) {
+        const chunk=A.queue.slice(0,100);
+        try{await api('/api/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries:chunk})});}
+        catch(error){if(error.status===400){A.queue.splice(0,chunk.length);continue;}throw error;} // a rejected batch is dropped, it must not block the queue
+        A.queue.splice(0,chunk.length);
+      }
+      if(A.afterFlush){const f=A.afterFlush;A.afterFlush=null;f();}
+    }catch(error){/* retried on the next tick */}
+    finally{A.busy=false;}
+  }
+  window.addEventListener('pagehide',()=>{
+    const A=window.__gfAudit;
+    if(A&&A.queue.length&&navigator.sendBeacon){try{navigator.sendBeacon('/api/audit',new Blob([JSON.stringify({entries:A.queue.slice(0,100)})],{type:'application/json'}));}catch{}}
+  });
   async function sync() {
+    flushAudit();
     if(busy||conflicted)return;
     busy=true;
     try {

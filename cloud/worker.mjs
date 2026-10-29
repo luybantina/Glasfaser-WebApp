@@ -72,6 +72,32 @@ async function fileGet(env,id,head) {
   return new Response(head?null:value,{headers:{'Content-Type':metadata.type,'Content-Disposition':'inline','Cache-Control':'private, max-age=31536000, immutable','X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'SAMEORIGIN'}});
 }
 
+// Shared activity log: every device sends the entries its signed-in user produced; administrators read them all.
+// Entries are stored and returned as ready-made JSON text (no parsing on read: the free plan allows only 10 ms CPU).
+const AUDIT_KEEP_DAYS=400;
+async function auditGet(env,user,url) {
+  const headers={...HEADERS,'Content-Type':'application/json; charset=utf-8'};
+  if(user.role!=='admin')return new Response('[]',{headers});
+  const limit=Math.min(Math.max(parseInt(url.searchParams.get('limit')||'3000',10)||3000,1),10000);
+  const rows=(await env.DB.prepare('SELECT entry FROM audit ORDER BY ts DESC LIMIT ?').bind(limit).all()).results;
+  return new Response('['+rows.map(r=>r.entry).reverse().join(',')+']',{headers});
+}
+async function auditPost(request,env,user) {
+  const {entries}=await request.json();
+  if(!Array.isArray(entries)||!entries.length||entries.length>100)fail('Invalid audit batch');
+  const statements=[];
+  for(const e of entries) {
+    if(!e||typeof e!=='object'||Array.isArray(e)||typeof e.id!=='string'||!e.id||e.id.length>60||typeof e.ts!=='string'||Number.isNaN(Date.parse(e.ts))||typeof e.uid!=='string')fail('Invalid audit entry');
+    if(user.role!=='admin'&&e.uid!==user.id)continue; // a non-admin cannot write entries for someone else
+    const text=JSON.stringify(e);
+    if(text.length>16000)continue; // oversized entry: skipped, never blocks the batch
+    statements.push(env.DB.prepare('INSERT OR IGNORE INTO audit(uid,id,ts,entry) VALUES(?,?,?,?)').bind(e.uid.slice(0,80),e.id,e.ts,text));
+  }
+  statements.push(env.DB.prepare('DELETE FROM audit WHERE ts<?').bind(new Date(Date.now()-AUDIT_KEEP_DAYS*864e5).toISOString()));
+  await env.DB.batch(statements);
+  return json({ok:true,stored:statements.length-1});
+}
+
 async function patch(request,env,user) {
   if(user.role==='viewer')fail('Нет прав на редактирование.',403);
   const {revision,operations}=await request.json();
@@ -133,6 +159,8 @@ export default {
       if(path==='/api/state'&&request.method==='GET')return json(await snapshot(env));
       if(path==='/api/revision'&&request.method==='GET')return json(await env.DB.prepare('SELECT revision FROM meta WHERE id=1').first());
       if(path==='/api/changes'&&request.method==='POST')return await patch(request,env,user);
+      if(path==='/api/audit'&&request.method==='GET')return await auditGet(env,user,url);
+      if(path==='/api/audit'&&request.method==='POST')return await auditPost(request,env,user);
       if(path==='/api/files'&&request.method==='POST')return await filePost(request,env,user,url);
       if(path.startsWith('/api/files/')&&request.method!=='POST')return await fileGet(env,path.slice(11),request.method==='HEAD');
       if(path.startsWith('/api/'))return json({error:'not_found'},404);

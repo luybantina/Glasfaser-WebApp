@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS audit (
+  uid TEXT NOT NULL,
+  id TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  entry TEXT NOT NULL,
+  PRIMARY KEY (uid, id)
+);
+CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);

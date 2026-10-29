@@ -18,6 +18,8 @@ before(async()=>{
   db=await mf.getD1Database('DB');
   const schema=await readFile(new URL('../cloud/migrations/0001.sql',import.meta.url),'utf8');
   for(const statement of schema.split(';').filter(x=>x.trim()))await db.prepare(statement).run();
+  const audit=await readFile(new URL('../cloud/migrations/0002.sql',import.meta.url),'utf8');
+  for(const statement of audit.split(';').filter(x=>x.trim()))await db.prepare(statement).run();
   for(const user of [{id:'admin',login:'test-admin',role:'admin'},{id:'other',login:'test-other',role:'admin'},{id:'viewer',login:'test-viewer',role:'viewer'}]) {
     await db.prepare("INSERT INTO records VALUES('users',?,?)").bind(user.id,JSON.stringify({...user,salt:'test-salt',passHash:legacyHash('test-password','test-salt'),blocked:false})).run();
   }
@@ -117,4 +119,23 @@ test('a viewer cannot upload attachments',async()=>{
   const login=await request('/login',{method:'POST',body:new URLSearchParams({login:'test-viewer',password:'test-password'}),redirect:'manual'});
   const viewer=login.headers.get('set-cookie').split(';')[0],bytes=new TextEncoder().encode('hello');
   assert.equal((await upload(await sha(bytes),'image/png',bytes,{Cookie:viewer})).status,403);
+});
+const post=(path,body,headers={})=>request(path,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
+test('shared activity log: administrators read the entries of all users, a non-admin only writes their own',async()=>{
+  const e=(id,uid,ts,extra={})=>({id,uid,ts,user:'x',act:'update',kind:'works',label:'l-'+id,...extra});
+  const ok=await post('/api/audit',{entries:[e('a1','admin','2026-10-29T10:00:00.000Z'),e('a2','other','2026-10-29T11:00:00.000Z'),e('a3','admin','2026-10-29T09:00:00.000Z',{changes:[{f:'date',from:'1',to:'2'}]})]});
+  assert.equal(ok.status,200);
+  const list=await(await request('/api/audit')).json();
+  assert.deepEqual(list.map(x=>x.id),['a3','a1','a2']);                       // oldest first
+  assert.equal(list[0].changes[0].to,'2');
+  const login=await request('/login',{method:'POST',body:new URLSearchParams({login:'test-viewer',password:'test-password'}),redirect:'manual'});
+  const viewer=login.headers.get('set-cookie').split(';')[0];
+  assert.deepEqual(await(await request('/api/audit',{headers:{Cookie:viewer}})).json(),[]);   // not an admin: nothing
+  const foreign=await post('/api/audit',{entries:[e('v1','viewer','2026-10-29T12:00:00.000Z'),e('v2','admin','2026-10-29T12:01:00.000Z')]},{Cookie:viewer});
+  assert.equal(foreign.status,200);
+  const ids=(await(await request('/api/audit')).json()).map(x=>x.id);
+  assert.ok(ids.includes('v1')&&!ids.includes('v2'));                          // own entry stored, foreign entry skipped
+  assert.equal((await post('/api/audit',{entries:[{id:'bad',uid:'admin'}]})).status,400);
+  assert.equal((await post('/api/audit',{entries:[]})).status,400);
+  assert.equal((await mf.dispatchFetch(origin+'/api/audit')).status,401);
 });
