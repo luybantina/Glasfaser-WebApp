@@ -1,4 +1,4 @@
-﻿import {COLLECTIONS,LISTS,unpack} from './shared.mjs';
+import {COLLECTIONS,LISTS,unpack} from './shared.mjs';
 import {digest,checkPassword,publicUser} from './auth.mjs';
 
 const HEADERS={'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'DENY'};
@@ -57,9 +57,9 @@ const hex=buffer=>Array.from(new Uint8Array(buffer),x=>x.toString(16).padStart(2
 async function filePost(request,env,user,url) {
   if(user.role==='viewer')fail('Нет прав на редактирование.',403);
   if(!env.FILES)fail('Хранилище файлов не подключено.',503);
+  const bytes=await request.arrayBuffer(); // consume the body first so a rejected upload is not cut off mid-transfer
   const id=url.searchParams.get('id')||'',type=url.searchParams.get('type')||'';
   if(!/^[a-f0-9]{64}$/.test(id)||!FILE_TYPES.includes(type))fail('Invalid file');
-  const bytes=await request.arrayBuffer();
   if(!bytes.byteLength||bytes.byteLength>FILE_MAX_BYTES)fail('Invalid file data');
   if(hex(await crypto.subtle.digest('SHA-256',bytes))!==id)fail('File checksum mismatch');
   await env.FILES.put(id,bytes,{metadata:{type}});

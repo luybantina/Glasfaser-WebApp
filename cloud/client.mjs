@@ -117,12 +117,26 @@ export async function start(boot,bridge) {
     },panel);
     overlay.append(panel);document.body.append(overlay);
   }
+  // While a form is open the screen must not be redrawn, but our own saved changes can still be sent.
+  async function pushOnly() {
+    let operations=diff(base,bridge.get());
+    while(operations.length) {
+      status(`Облако: отправка изменений (${operations.length})…`);
+      const chunk=operations.slice(0,40);
+      let result;
+      try{result=await api('/api/changes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision,operations:chunk})});}
+      catch(error){if(error.status===409){status('В облаке есть новые данные — объединятся после закрытия окна');return;}throw error;}
+      base=apply(base,chunk);revision=result.revision;
+      operations=diff(base,bridge.get());
+    }
+    status('Облако: всё сохранено');
+  }
   async function sync() {
-    if(busy||conflicted||editing())return;
+    if(busy||conflicted)return;
     busy=true;
     try {
       await externalize();
-      if(editing())return;
+      if(editing()){await pushOnly();return;}
       let operations=diff(base,bridge.get());
       if(!operations.length) {
         const latest=await api('/api/revision');
