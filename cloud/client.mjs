@@ -1,5 +1,6 @@
 import {clone,equal,merge,diff,apply} from './shared.mjs';
 import {installUsers} from './users.mjs';
+import {startPlans} from './plans.mjs';
 
 export async function start(boot,bridge) {
   const tabId=sessionStorage.gfCloudTab||(sessionStorage.gfCloudTab=crypto.randomUUID());
@@ -273,4 +274,5 @@ export async function start(boot,bridge) {
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync();});
   setInterval(()=>{if(!document.hidden)sync();},5000);
   installUsers(boot,bridge);persist();bridge.render();sync();
+  startPlans({bridge,api,sha256});
 }

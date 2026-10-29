@@ -1,4 +1,4 @@
-export const LISTS = ['projects','pops','schachts','addresses','cables','works','lbnummern','leistungen','aufmassRegisters','aufmassDocuments','users','termine'];
+export const LISTS = ['projects','pops','schachts','addresses','cables','works','lbnummern','leistungen','aufmassRegisters','aufmassDocuments','users','termine','splicePlans'];
 export const OBJECTS = ['aufmassSettings','settings319','addrHistory'];
 export const COLLECTIONS = [...LISTS,...OBJECTS];
 export const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b);

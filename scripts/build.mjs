@@ -28,5 +28,5 @@ html=html.replace(oldStart,`(async()=>{
 })().catch(error=>{console.error('Cloud startup failed',error);document.getElementById('app').textContent='Не удалось подключить облачную базу. Перезагрузите страницу; локальные изменения сохранены.';});`);
 await mkdir(new URL('../dist/cloud/',import.meta.url),{recursive:true});
 await writeFile(new URL('../dist/index.html',import.meta.url),html);
-for(const file of ['client.mjs','shared.mjs','users.mjs','audit-shim.js'])await copyFile(new URL(`../cloud/${file}`,import.meta.url),new URL(`../dist/cloud/${file}`,import.meta.url));
+for(const file of ['client.mjs','shared.mjs','users.mjs','plans.mjs','audit-shim.js'])await copyFile(new URL(`../cloud/${file}`,import.meta.url),new URL(`../dist/cloud/${file}`,import.meta.url));
 console.log('Cloud application built. No backup data is included in static assets.');
