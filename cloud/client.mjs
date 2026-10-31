@@ -27,7 +27,8 @@ export async function start(boot,bridge) {
       if(!suppress){status('Изменения ещё не отправлены в облако — не закрывайте страницу');clearTimeout(retryTimer);retryTimer=setTimeout(sync,300);}
       return;
     }
-    return baseSet.call(this,key,value);
+    /* the wrapper that old patches put on localStorage writes to localStorage whatever `this` is: sessionStorage (tabs of Termine, window state ...) must use the original function */
+    return (this===localStorage?baseSet:originalSet).call(this,key,value);
   };
   Storage.prototype.setItem=guardedSet;
   if(Object.getOwnPropertyDescriptor(localStorage,'setItem'))localStorage.setItem=guardedSet;
