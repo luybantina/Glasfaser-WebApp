@@ -12,7 +12,7 @@ export async function start(boot,bridge) {
   bar.id='gf-cloud-status';
   bar.style.cssText='position:fixed;bottom:8px;right:8px;z-index:2001;background:#17324d;color:white;border-radius:9px;padding:9px 12px;font:13px system-ui;max-width:90vw;box-shadow:0 2px 10px #0003;display:flex;align-items:center;gap:10px;flex-wrap:wrap';
   const label=document.createElement('span');bar.append(label);
-  const button=(text,action,parent=bar)=>{const b=document.createElement('button');b.textContent=text;b.style.cssText='cursor:pointer;font:inherit;padding:5px 8px;border:1px solid #abbccc;border-radius:5px;background:white;color:#17324d';b.onclick=action;parent.append(b);return b;};
+  const button=(text,action,parent=bar)=>{const b=document.createElement('button');b.textContent=text;b.style.cssText='cursor:pointer;font:inherit;padding:5px 8px;border:1px solid #abbccc;border-radius:5px;background:white;color:#17324d';if(parent===bar)b.className='gfx';b.onclick=action;parent.append(b);return b;};
   const status=text=>{label.textContent=text;bar.style.background=/Облако: всё сохранено/.test(text)?'#17324d':'#8a3b12';};
   /* Nothing of the database is kept in the browser: the app's own localStorage 'gfdb' reads/writes go to memory only. */
   let memDb=JSON.stringify(boot.data);
@@ -111,6 +111,23 @@ export async function start(boot,bridge) {
     localStorage.removeItem('gfdb');sessionStorage.removeItem('gf_session_user');location.href='/';
   });
   document.body.append(bar);
+  /* The status bar must never cover the buttons of an open window: it hides while a window is open,
+     and on a phone it is a slim strip whose buttons open with "⋯". */
+  const style=document.createElement('style');
+  style.textContent=`#gf-cloud-status .gfm{display:none}
+    @media(max-width:700px){
+      #gf-cloud-status{left:8px!important;right:8px!important;bottom:6px!important;max-width:none!important;padding:5px 9px!important;font-size:12px!important;gap:6px!important;justify-content:space-between}
+      #gf-cloud-status .gfx{display:none}
+      #gf-cloud-status.gfopen .gfx{display:inline-block}
+      #gf-cloud-status .gfm{display:inline-block;margin-left:auto;cursor:pointer;font:inherit;padding:1px 9px;border:1px solid #abbccc;border-radius:5px;background:transparent;color:white}
+    }`;
+  document.head.append(style);
+  const more=document.createElement('button');more.type='button';more.className='gfm';more.textContent='⋯';more.setAttribute('aria-label','Menü');
+  more.onclick=()=>bar.classList.toggle('gfopen');bar.insertBefore(more,label.nextSibling);
+  const POPUP='#modal .modal, #gfTDetailBg317, .file-preview-overlay, #gfAddrAsk440';
+  let popupTimer=null;
+  const syncVisibility=()=>{popupTimer=null;const open=!!document.querySelector(POPUP);bar.style.display=open?'none':'flex';if(open)bar.classList.remove('gfopen');};
+  try{new MutationObserver(()=>{if(!popupTimer)popupTimer=setTimeout(syncVisibility,60);}).observe(document.body,{childList:true,subtree:true});}catch{}
   if(boot.env==='staging') {
     const banner=document.createElement('div');
     banner.textContent='ТЕСТОВАЯ СРЕДА — данные здесь не рабочие';
