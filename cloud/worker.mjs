@@ -178,6 +178,8 @@ export default {
       const response=await env.ASSETS.fetch(request);
       return new Response(response.body,{status:response.status,headers:{...Object.fromEntries(response.headers),...HEADERS}});
     } catch(error) {
+      // A request body that is not valid JSON is the caller's mistake (400), not a server outage (503).
+      if(error instanceof SyntaxError)return json({error:'Неверный формат запроса.'},400);
       // Never return SQL errors or request bodies, which may contain private data.
       return json({error:error.status?error.message:'Сервер временно недоступен. Изменения остаются на устройстве.'},error.status||503);
     }
