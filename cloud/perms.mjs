@@ -87,7 +87,7 @@ export const roleExists = (roleId, roles) => roleId==='admin' || LEGACY[roleId]!
 export const userLabel = u => (((u.firstName||'')+' '+(u.lastName||'')).trim()) || u.login || '';
 
 const ADDRESS_FIELDS = ['homeId','apartments','tbmId','fotoGis','we'];
-const TERMIN_IGNORED = ['updatedAt','takenFrom'];
+const TERMIN_IGNORED = ['updatedAt','takenFrom','ne4Tried'];
 const same = (a,b) => JSON.stringify(a)===JSON.stringify(b);
 
 // What does a change of a meeting consist of: other executor / closing / the rest (time, address, quantities, ...).
