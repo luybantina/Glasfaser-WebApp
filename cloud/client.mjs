@@ -1,4 +1,5 @@
-import {clone,equal,merge,diff,apply} from './shared.mjs';
+import {clone,equal,merge,diff,apply,records,LISTS} from './shared.mjs';
+import {checkOp,makeCtx} from './perms.mjs';
 import {installUsers} from './users.mjs';
 import {startPlans} from './plans.mjs';
 
@@ -181,8 +182,39 @@ export async function start(boot,bridge) {
     },panel);
     overlay.append(panel);document.body.append(overlay);
   }
+  /* Rights: a change the server would refuse (the role of the signed-in user does not allow it) is taken back here at once,
+     so that nothing stays "unsaved" for ever. The screens also hide what a role must not use; this is the safety net. */
+  function revertRecord(data,collection,id,old) {
+    if(LISTS.includes(collection)) {
+      data[collection]=data[collection]||[];
+      const i=data[collection].findIndex(x=>x&&x.id===id);
+      if(old===undefined){if(i>=0)data[collection].splice(i,1);}
+      else if(i>=0)data[collection][i]=clone(old);else data[collection].push(clone(old));
+    } else if(old===undefined)delete data[collection];else data[collection]=clone(old);
+  }
+  function enforce() {
+    try {
+      const data=bridge.get(),me=(data.users||[]).find(u=>u.id===boot.user.id)||boot.user;
+      if(!me||me.role==='admin')return false;
+      const ops=diff(base,data);if(!ops.length)return false;
+      const ctx=makeCtx(me,data.roles||[]),R=records(base),bad=[];
+      for(const op of ops) {
+        const old=R.get(op.collection+'/'+op.id)?.value;
+        const reason=checkOp(ctx,op,old);
+        if(reason)bad.push({op,old,reason});
+      }
+      if(!bad.length)return false;
+      const fresh=clone(data);
+      for(const b of bad)revertRecord(fresh,b.op.collection,b.op.id,b.old);
+      install(fresh,true);
+      const text=[...new Set(bad.map(b=>b.reason))].join(' ');
+      try{window.uiNotice?window.uiNotice(text+' Изменение отменено.','Нет прав'):status(text);}catch{status(text);}
+      return true;
+    } catch(error){console.warn('rights check',error);return false;}
+  }
   // While a form is open the screen must not be redrawn, but our own saved changes can still be sent.
   async function pushOnly() {
+    enforce();
     let operations=diff(base,bridge.get());
     while(operations.length) {
       status(`Облако: отправка изменений (${operations.length})…`);
@@ -237,6 +269,7 @@ export async function start(boot,bridge) {
     if(busy||conflicted)return;
     busy=true;
     try {
+      enforce();
       await externalize();
       if(editing()){await pushOnly();await pullQuiet();return;}
       let operations=diff(base,bridge.get());

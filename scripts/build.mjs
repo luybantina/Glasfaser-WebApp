@@ -3,7 +3,7 @@ const source=await readFile(new URL('../index.html',import.meta.url),'utf8');
 const oldStart="initializeUpdateRuntime().then(()=>{normalizeAddressLinks();drawNav();render()}).catch(()=>{normalizeAddressLinks();drawNav();render()});";
 if(!source.includes(oldStart))throw new Error('Application startup changed; update cloud adapter before building.');
 if(!source.includes("const _storedDb=localStorage.getItem(STORAGE_KEY)"))throw new Error('Database startup changed.');
-let html=source.replace('<head>','<head><!--CLOUD_BOOTSTRAP--><script src="/cloud/audit-shim.js"></script>');
+let html=source.replace('<head>','<head><!--CLOUD_BOOTSTRAP--><script src="/cloud/audit-shim.js"></script><script src="/cloud/perms-global.js"></script>');
 if(!html.includes('<!--CLOUD_BOOTSTRAP-->'))throw new Error('Missing head');
 html=html.replace('const _storedDb=localStorage.getItem(STORAGE_KEY)','const _storedDb=JSON.stringify(window.__GF_CLOUD__.data)');
 // Cloud versions are deployed centrally; ignore device-specific executable updates.
@@ -33,5 +33,11 @@ html=html.replace(oldStart,`(async()=>{
 })().catch(error=>{console.error('Cloud startup failed',error);document.getElementById('app').textContent='Не удалось подключить облачную базу. Перезагрузите страницу; локальные изменения сохранены.';});`);
 await mkdir(new URL('../dist/cloud/',import.meta.url),{recursive:true});
 await writeFile(new URL('../dist/index.html',import.meta.url),html);
-for(const file of ['client.mjs','shared.mjs','users.mjs','plans.mjs','audit-shim.js'])await copyFile(new URL(`../cloud/${file}`,import.meta.url),new URL(`../dist/cloud/${file}`,import.meta.url));
+// The rights logic also as a plain script (window.GFPerms + window.gfCan), loaded before the program: the screens are built with it.
+const permsSource=await readFile(new URL('../cloud/perms.mjs',import.meta.url),'utf8');
+await writeFile(new URL('../dist/cloud/perms-global.js',import.meta.url),`(function(){\n${permsSource.replace(/^export (const|function) /gm,'$1 ')}\nwindow.GFPerms={PERM_GROUPS,ALL_KEYS,DEFAULT_ROLES,permsOf,roleExists,userLabel,terminChange,checkOp,makeCtx};
+window.gfCan=function(key){try{const boot=window.__GF_CLOUD__||{},d=(typeof db!=='undefined'&&db)||boot.data||{},me=(d.users||[]).find(u=>u.id===(boot.user||{}).id)||boot.user;if(!me)return false;return permsOf(me.role,d.roles||[]).has(key);}catch(e){return false}};
+window.gfRoleId=function(){try{const boot=window.__GF_CLOUD__||{},d=(typeof db!=='undefined'&&db)||boot.data||{},me=(d.users||[]).find(u=>u.id===(boot.user||{}).id)||boot.user;return me?me.role||'admin':''}catch(e){return ''}};
+})();`);
+for(const file of ['client.mjs','shared.mjs','users.mjs','plans.mjs','perms.mjs','audit-shim.js'])await copyFile(new URL(`../cloud/${file}`,import.meta.url),new URL(`../dist/cloud/${file}`,import.meta.url));
 console.log('Cloud application built. No backup data is included in static assets.');

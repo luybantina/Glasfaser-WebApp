@@ -1,5 +1,6 @@
 import {COLLECTIONS,LISTS,unpack} from './shared.mjs';
 import {digest,checkPassword,publicUser} from './auth.mjs';
+import {checkOp,makeCtx,roleExists} from './perms.mjs';
 
 const HEADERS={'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'DENY'};
 const json=(body,status=200,headers={})=>new Response(JSON.stringify(body),{status,headers:{...HEADERS,'Content-Type':'application/json; charset=utf-8',...headers}});
@@ -22,6 +23,11 @@ async function snapshot(env) {
   const data=unpack(rows.results);
   data.users=data.users.map(publicUser);
   return {revision:meta.results[0].revision,data};
+}
+// Rights of the signed-in user (roles are records of the list "roles"; the role "admin" can do everything).
+async function rightsOf(env,user) {
+  const roles=(await env.DB.prepare("SELECT payload FROM records WHERE collection='roles'").all()).results.map(x=>JSON.parse(x.payload));
+  return {ctx:makeCtx(user,roles),roles};
 }
 async function throttle(env,key,limit) {
   const now=Date.now();
@@ -56,6 +62,7 @@ const FILE_MAX_BYTES=20000000;
 const hex=buffer=>Array.from(new Uint8Array(buffer),x=>x.toString(16).padStart(2,'0')).join('');
 async function filePost(request,env,user,url) {
   if(user.role==='viewer')fail('Нет прав на редактирование.',403);
+  if(user.role!=='admin'){const {ctx}=await rightsOf(env,user);if(!['work.editOwn','work.editAll','doc.edit','dict.edit','meet.close'].some(ctx.can))fail('Нет прав на загрузку файлов.',403);}
   if(!env.FILES)fail('Хранилище файлов не подключено.',503);
   const bytes=await request.arrayBuffer(); // consume the body first so a rejected upload is not cut off mid-transfer
   const id=url.searchParams.get('id')||'',type=url.searchParams.get('type')||'';
@@ -102,7 +109,8 @@ async function patch(request,env,user) {
   if(user.role==='viewer')fail('Нет прав на редактирование.',403);
   const {revision,operations}=await request.json();
   if(!Number.isSafeInteger(revision)||revision<0||!Array.isArray(operations)||!operations.length||operations.length>40)fail('Invalid change batch');
-  const existingUsers=operations.some(op=>op.collection==='users')?new Set((await env.DB.prepare("SELECT id FROM records WHERE collection='users'").all()).results.map(x=>x.id)):new Set();
+  const rights=await rightsOf(env,user);
+  const existingUsers=operations.some(op=>op.collection==='users')?new Map((await env.DB.prepare("SELECT id,json_extract(payload,'$.role') AS role FROM records WHERE collection='users'").all()).results.map(x=>[x.id,x.role])):new Map();
   const seen=new Set();
   for(const op of operations) {
     if(!COLLECTIONS.includes(op.collection)||typeof op.id!=='string'||!op.id.length||op.id.length>200)fail('Invalid record');
@@ -113,16 +121,29 @@ async function patch(request,env,user) {
       if(!op.value||Array.isArray(op.value)||typeof op.value!=='object'||JSON.stringify(op.value).length>1800000)fail('Invalid record value');
       if(LISTS.includes(op.collection)&&op.value.id!==op.id)fail('Record ID mismatch');
     }
+    if(op.collection==='roles'&&(op.id==='admin'||(op.value&&(typeof op.value.name!=='string'||!op.value.name.trim()||op.value.name.length>80||!op.value.perms||typeof op.value.perms!=='object'||Array.isArray(op.value.perms)))))fail('Invalid role');
     if(op.collection==='users') {
-      if(user.role!=='admin')fail('Только администратор может менять пользователей.',403);
+      if(!rights.ctx.can('settings.users'))fail('Нет прав: пользователи.',403);
+      // only an administrator may make an administrator or change one
+      if(user.role!=='admin'&&((op.value&&op.value.role==='admin')||existingUsers.get(op.id)==='admin'))fail('Только администратор может назначать и менять администраторов.',403);
+      if(user.role!=='admin'&&op.id===user.id&&op.value&&op.value.role!==user.role)fail('Нельзя менять свою роль.',403);
       if(op.id===user.id&&(!op.value||op.value.blocked||op.value.role!=='admin'))fail('Нельзя удалить, заблокировать или понизить свою учётную запись.',403);
       if(op.value) {
         delete op.value.hasPassword; // Computed from credentials, never trusted from a client.
-        if(typeof op.value.login!=='string'||!op.value.login.trim()||op.value.login.length>120||!['admin','editor','viewer'].includes(op.value.role))fail('Invalid user');
+        if(typeof op.value.login!=='string'||!op.value.login.trim()||op.value.login.length>120||!roleExists(op.value.role,[...rights.roles.filter(r=>!operations.some(o=>o.collection==='roles'&&o.id===r.id)),...operations.filter(o=>o.collection==='roles'&&o.value).map(o=>o.value)]))fail('Invalid user');
         if('passHash' in op.value&&!/^[a-f0-9]{64}$/.test(op.value.passHash))fail('Invalid password hash');
         if('salt' in op.value&&(typeof op.value.salt!=='string'||!op.value.salt||op.value.salt.length>200))fail('Invalid salt');
         if(!existingUsers.has(op.id)&&(!op.value.salt||!op.value.passHash))fail('New user needs a password');
       }
+    }
+  }
+  if(user.role!=='admin') {
+    // the current records of everything that is changed, to tell "own" from "foreign" and what exactly changed
+    const keys=operations.map(op=>op.collection+'/'+op.id);
+    const olds=new Map((await env.DB.prepare(`SELECT collection,id,payload FROM records WHERE (collection||'/'||id) IN (${keys.map(()=>'?').join(',')})`).bind(...keys).all()).results.map(r=>[r.collection+'/'+r.id,JSON.parse(r.payload)]));
+    for(const op of operations) {
+      const reason=checkOp(rights.ctx,op,olds.get(op.collection+'/'+op.id));
+      if(reason)fail(reason,403);
     }
   }
   const commit=crypto.randomUUID();
