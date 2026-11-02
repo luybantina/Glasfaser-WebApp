@@ -133,7 +133,7 @@ async function patch(request,env,user) {
         if(typeof op.value.login!=='string'||!op.value.login.trim()||op.value.login.length>120||!roleExists(op.value.role,[...rights.roles.filter(r=>!operations.some(o=>o.collection==='roles'&&o.id===r.id)),...operations.filter(o=>o.collection==='roles'&&o.value).map(o=>o.value)]))fail('Invalid user');
         if('passHash' in op.value&&!/^[a-f0-9]{64}$/.test(op.value.passHash))fail('Invalid password hash');
         if('salt' in op.value&&(typeof op.value.salt!=='string'||!op.value.salt||op.value.salt.length>200))fail('Invalid salt');
-        if(!existingUsers.has(op.id)&&(!op.value.salt||!op.value.passHash))fail('New user needs a password');
+        // a user without a password is allowed (he cannot sign in until the administrator sets one)
       }
     }
   }

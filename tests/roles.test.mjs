@@ -105,3 +105,10 @@ test('server: the assistant cannot write acts',async()=>{
   const s=await state('ass');
   const r=await change('ass',s.revision,[{collection:'works',id:'w9',value:{id:'w9',performer:'Ass Ist'}}]);assert.equal(r.status,403);
 });
+test('server: the administrator can create a user without a password (he cannot sign in yet)',async()=>{
+  const s=await state('admin');
+  const r=await change('admin',s.revision,[{collection:'users',id:'nopw',value:{id:'nopw',login:'nopw',firstName:'No',lastName:'Pw',role:'role_monteur',blocked:false}}]);
+  assert.equal(r.status,200);
+  const l=await request('x','/login',{method:'POST',body:new URLSearchParams({login:'nopw',password:''}),redirect:'manual'});
+  assert.ok(!(l.headers.get('set-cookie')||'').includes('='));
+});
